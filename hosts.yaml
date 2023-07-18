@@ -1,0 +1,4 @@
+master:
+  hosts:
+    sandbox:
+      ansible_host: sandbox

@@ -1,0 +1,112 @@
+- name: ping master nodes 
+  hosts: master
+  become: yes
+
+  vars:
+    os: "xUbuntu_22.04"
+    version: "1.25"
+
+  tasks:
+    - name: create kuber user account
+      user: name=kube state=present createhome=yes shell=/bin/bash
+
+    - name: disable swap for session
+      command: swapoff -a
+
+    - name: disable swap after reboot
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*)([^#\n]+\s+)(\w+\s+)swap(\s+.*)$'
+        replace: '#\1\2\3swap\4'
+        backup: yes
+
+    - name: enable netfilter
+      community.general.modprobe:
+        name: "br_netfilter"
+        persistent: "present"
+
+    - name: enable ip forwarding
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+
+    - name: allow kube to use sudo without password
+      lineinfile: 
+        dest: /etc/sudoers
+        line: 'kube ALL=(ALL) NOPASSWD: ALL'
+        validate: 'visudo -cf %s'
+
+    - name: add crio source
+      blockinfile: 
+        create: true
+        dest: /etc/apt/sources.list.d/crio.list
+        block: | 
+          deb [signed-by=/usr/share/keyrings/libcontainers-archive-keyring.gpg] https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/{{ os }}/ / 
+          deb [signed-by=/usr/share/keyrings/libcontainers-crio-archive-keyring.gpg] https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/{{ version }}/{{ os }}/ /
+
+    - name: add crio keyring
+      ansible.builtin.apt_key:
+        keyring: "/usr/share/keyrings/libcontainers-crio-archive-keyring.gpg"
+        url: "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/{{ version }}/{{ os }}/Release.key" 
+        state: "present"
+
+    - name: add crio keyring
+      ansible.builtin.apt_key:
+        keyring: "/usr/share/keyrings/libcontainers-archive-keyring.gpg"
+        url: "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/{{ os }}/Release.key " 
+        state: "present"
+
+    - name: install crio
+      ansible.builtin.apt:
+        update_cache: yes
+        pkg: 
+          - cri-o
+          - cri-o-runc
+
+
+    - name: add kubernetes keyring
+      ansible.builtin.apt_key:
+        keyring: "/etc/apt/keyrings/kubernetes-archive-keyring.gpg" 
+        url: "https://packages.cloud.google.com/apt/doc/apt-key.gpg "
+        state: "present"
+
+    - name: add kubernetes source
+      blockinfile: 
+        create: true
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        block: | 
+          deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main
+      
+    - name: install kubernetes
+      ansible.builtin.apt:
+        update_cache: yes
+        pkg: 
+          - kubelet
+          - kubeadm
+          - kubectl 
+
+
+    - name: start crio
+      service:
+        name: "crio"
+        enabled: true
+        state: started
+
+    - name: start kubernetes, if not running
+      shell:
+        cmd: pgrep kube || kubeadm init --cri-socket unix:///run/crio/crio.sock 
+
+    - name: create kube config directory
+      file:
+        path: /home/{{ ansible_user}}/.kube
+        state: directory
+
+    - name: copy kube config file
+      copy: 
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        remote_src: true
+
+
+
+        
